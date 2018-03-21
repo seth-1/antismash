@@ -9,6 +9,20 @@ from enum import Enum, unique
 from typing import Dict, List, Set, Optional, Union
 
 
+class ActiveSiteFinderQualifier:
+    def __init__(self):
+        self._hits = []
+
+    def add(self, label: str) -> None:
+        self._hits.append(str(label))
+
+    def to_biopython(self) -> List[str]:
+        return self._hits
+
+    def __bool__(self) -> bool:
+        return bool(self._hits)
+
+
 class NRPSPKSQualifier(list):
     """ A qualifier for tracking information about NRPS/PKS domains within a CDS.
 

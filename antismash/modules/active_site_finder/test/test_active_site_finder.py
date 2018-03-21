@@ -50,7 +50,7 @@ class TestASF(unittest.TestCase):
 
         self.options.qualifier_tags = qualifier_tags
 
-        self.record = record_processing.parse_input_sequence(path.get_full_path(__file__, 'Y16952.3.final.gbk'))[0]
+        self.record = record_processing.parse_input_sequence(path.get_full_path(__file__, 'data', 'Y16952.3.final.gbk'))[0]
 
         self.assertEqual(360, self.record.get_feature_count())
         assert len(self.record.get_pfam_domains()) == 130

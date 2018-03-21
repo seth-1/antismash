@@ -15,19 +15,7 @@ from Bio.Seq import Seq
 from Bio.SeqFeature import SeqFeature, FeatureLocation, CompoundLocation
 from Bio.SeqRecord import SeqRecord
 
-from .qualifiers import NRPSPKSQualifier, SecMetQualifier, GeneFunction, GeneFunctionAnnotations
-
-class ActiveSiteFinderQualifier:
-    def __init__(self, scaffold=None, choice=None, prediction=None, note=None):
-        if not any([scaffold, choice, prediction, note]):
-            raise ValueError("Can't create an empty ASF qualifier")
-        assert all(isinstance(arg, list) for arg in [scaffold, choice, prediction, note] if arg is not None)
-        if (scaffold or choice) and not note:
-            raise ValueError("If scaffold or choice are provided, note must also be provided")
-        self.choice = choice or []
-        self.prediction = prediction or []
-        self.scaffold = scaffold or []
-        self.note = note or []
+from .qualifiers import NRPSPKSQualifier, SecMetQualifier, GeneFunction, GeneFunctionAnnotations, ActiveSiteFinderQualifier
 
 
 def _convert_protein_position_to_dna(start: int, end: int, location: FeatureLocation) -> Tuple[int, int]:
@@ -623,12 +611,13 @@ class PFAMDomain(Domain):
 
 class AntismashDomain(Domain):
     """ A class to represent a Domain with extra specificities and type information """
-    __slots__ = ["domain_subtype", "specificity"]
+    __slots__ = ["domain_subtype", "specificity", "asf"]
 
     def __init__(self, location):
         super().__init__(location, feature_type="aSDomain")
         self.domain_subtype = None
         self.specificity = []
+        self.asf = None  # active site finder results, type: ActiveSiteFinderQualifier
 
     def to_biopython(self, qualifiers=None) -> List[SeqFeature]:
         mine = OrderedDict()  # type: Dict[str, List[str]]
@@ -636,6 +625,8 @@ class AntismashDomain(Domain):
             mine["domain_subtype"] = [self.domain_subtype]
         if self.specificity:
             mine["specificity"] = self.specificity
+        if self.asf:
+            mine["ASF"] = self.asf.to_biopython()
         if qualifiers:
             mine.update(qualifiers)
         return super().to_biopython(mine)

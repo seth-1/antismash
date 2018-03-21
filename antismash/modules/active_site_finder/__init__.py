@@ -4,28 +4,31 @@
 Identify conserved active site residues in PFAM_Doman / aSDomain features
 """
 
+import datetime
+import glob
 from io import StringIO
 import logging
 import os
 import re
 from tempfile import NamedTemporaryFile
+from typing import List, Optional
+import warnings
 
 try:
     import xml.etree.cElementTree as ET
 except ImportError:
     import xml.etree.ElementTree as ET
 
-# Ignore Biopython experimental warning
-import warnings
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    from Bio import SearchIO
-
 from antismash.common import path, subprocessing, module_results, secmet
 from antismash.config import get_config
 from antismash.config.args import ModuleArgs
 
 from .analysis import run_all
+
+# Ignore Biopython experimental warning
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from Bio import SearchIO
 
 NAME = "ActiveSiteFinder"
 SHORT_DESCRIPTION = "ActiveSiteFinder identifies conserved active sites in PFAM_Domain/aSDomain features"
@@ -71,8 +74,8 @@ def is_enabled(options):
 
 def run_on_record(record, results, options):
     run_all(record)
-    asf = active_site_finder(record, options)
-    asf.execute()
+#    asf = active_site_finder(record, options)
+#    asf.execute()
     return ASFResults(record.id)
 
 
@@ -221,7 +224,7 @@ def filter_features_by_qualifier(features, query_tag, query_value):
     return filtered_features
 
 
-def get_scaffold_annotation(result, scaffold_xml):
+def get_scaffold_annotation(result, scaffold_xml) -> Optional[str]:
     "generate annotation from scaffold information"
 
     query_seq = result.hsps[0].aln[0].seq
@@ -311,7 +314,7 @@ def get_scaffold_annotation(result, scaffold_xml):
     return ASF_string
 
 
-def execute_tool(analysisResource, fileName=None, stdin_data=None):
+def execute_tool(analysisResource, fileName=None, stdin_data=None) -> List[SearchIO._model.query.QueryResult]:
     "Perform the external program execution"
 
     cmdlineList = []
@@ -374,7 +377,7 @@ def execute_tool(analysisResource, fileName=None, stdin_data=None):
     return results
 
 
-def run_external_tool(analysisResource, features):
+def run_external_tool(analysisResource, features) -> List[SearchIO._model.query.QueryResult]:
     "Generate tempfile containing the extracted Feature sequences and run tool defined in XML file"
 
     # write fasta file for the features to tempfile
@@ -472,33 +475,33 @@ class active_site_finder(object):
 
             # Get pre-annoated feature where we have rules defined in XML file
             if primaryTagType == "PFAM_domain":
-                SeqFeatureList = record.get_pfam_domains()
-                SeqFeatureList = filter_features_by_qualifier(SeqFeatureList, tag, tagValue)
+                domains_of_interest = record.get_pfam_domains()
+                domains_of_interest = filter_features_by_qualifier(domains_of_interest, tag, tagValue)
             elif primaryTagType == "aSDomain":
-                SeqFeatureList = [domain for domain in record.get_antismash_domains() if tagValue == domain.domain]
+                domains_of_interest = [domain for domain in record.get_antismash_domains() if tagValue == domain.domain]
             else:
                 raise ValueError("Unknown tag type: %s", primaryTagType)
 
-            SeqFeature_byID = {}
-            for n, feature in enumerate(SeqFeatureList):
-                SeqFeature_byID["feature%d" % n] = feature
+            domains_by_id = {}
+            for n, feature in enumerate(domains_of_interest):
+                domains_by_id["feature%d" % n] = feature
 
             # write multi-fasta tempfile with domain aa sequences and execute tool as defined in XML file
             # and parse with Biopython SearchIO
-            results = run_external_tool(analysisResource, SeqFeatureList)
+            results = run_external_tool(analysisResource, domains_of_interest)
             logging.debug("found %s hsps in hmmer results", len(results))
 
             # Now cycle through all results for this analysis and associate the results
-            # with the corresponding SeqFeature
+            # with the corresponding domain
             for result in results:
                 logging.debug("found hit with %s", result.id)
                 if not result.hsps:
                     continue
 
-                SeqFeature = SeqFeature_byID[result.id]
+                domain = domains_by_id[result.id]
 
                 if result.hsps[0].aln[0].id != result.id:
-                    # This actually should never happen...
+                    # This should never actually happen...
                     logging.exception("Result ID: %s", result.id)
                     logging.exception("Was looking for hit %s but got hit for %s instead",
                                       result.hsps[0].aln[0].id, result.id)
@@ -516,46 +519,45 @@ class active_site_finder(object):
                             (analysisResourceName, analysisResourceType)]
 
                 # identify predictions / active sites and annotate
-                descriptions, choiceResultList = get_prediction_annotation(result, predictionChoicesXML)
+                descriptions, predictions = get_prediction_annotation(result, predictionChoicesXML)
                 choices = list(descriptions)
 
                 for description in descriptions:
-                    logging.debug("adding ASF choice info to %s %s..%s:", SeqFeature.type, SeqFeature.location.start, SeqFeature.location.end)
+                    logging.debug("adding ASF choice info to %s %s..%s:", domain.type, domain.location.start, domain.location.end)
                     logging.debug(description)
                     note = ["ASF analyisis with definition %s (type %s)" %
                             (analysisResourceName, analysisResourceType)]
 
-                prediction = list(choiceResultList)
-                for choiceResult in choiceResultList:
-                    logging.debug("adding ASF choiceResult info to %s %s..%s:", SeqFeature.type, SeqFeature.location.start, SeqFeature.location.end)
+                prediction = list(predictions)
+                for choiceResult in predictions:
+                    logging.debug("adding ASF choiceResult info to %s %s..%s:", domain.type, domain.location.start, domain.location.end)
                     logging.debug(choiceResult)
 
                     # Also annotate choiceResult as sec_met qualifier to corresponding CDS feature
 
-                    correspondingCDSFeature = record.get_cds_name_mapping()[SeqFeature.locus_tag]
+                    correspondingCDSFeature = record.get_cds_by_name(domain.locus_tag)
 
                     logging.debug("adding ASF-prediction data to sec_met qualifier of %s", correspondingCDSFeature.get_name())
                     logging.critical("skipping addition of ASF prediction to feature.sec_met")
-                    if False:
+                    if False:  # TODO: was performed in as4, but not sure about these locations
                         sec_met_string = "ASF-prediction: "
 
                         # Calculate relative locations of domains
 
-                        if SeqFeature.strand == 1:
-                            start = ((SeqFeature.location.start - correspondingCDSFeature.location.start + 3) / 3) - 1
-                            end = ((SeqFeature.location.end - correspondingCDSFeature.location.start + 3) / 3) - 1
+                        if domain.strand == 1:
+                            start = (domain.location.start - correspondingCDSFeature.location.start) // 3
+                            end = (domain.location.end - correspondingCDSFeature.location.start) // 3
                         else:
-                            start = ((correspondingCDSFeature.location.end - SeqFeature.location.end + 3) / 3) - 1
-                            end = ((correspondingCDSFeature.location.end - SeqFeature.location.start + 3) / 3) - 1
-                        sec_met_string += SeqFeature.qualifiers['domain'][0] + " (" + str(start) + ".." + str(end) + "): "
+                            start = (correspondingCDSFeature.location.end - domain.location.end) // 3
+                            end = (correspondingCDSFeature.location.end - domain.location.start) // 3
+                        sec_met_string += domain.domain + " (" + str(start) + ".." + str(end) + "): "
                         sec_met_string += choiceResult
+                        # TODO: use an as5 qualifier
                         correspondingCDSFeature.qualifiers['sec_met'].append(sec_met_string)
                 if choices or scaffold or prediction:
-                    cds = record.get_cds_name_mapping()[SeqFeature.locus_tag]
+                    cds = record.get_cds_by_name(domain.locus_tag)
                     cds.asf = secmet.feature.ActiveSiteFinderQualifier(choice=choices,
                                  scaffold=scaffold, note=note, prediction=prediction)
-                    if analysisResourceName == "ASP_Thioesterase":
-                        print("cds:", cds.get_name(), choices, scaffold, note, prediction)
         return True
 
     def check_prereqs(self):
@@ -613,8 +615,7 @@ class active_site_finder(object):
                     # generated file younger than hmm profile, do nothing
                     continue
                 try:
-                    from glob import glob
-                    for filename in glob("{}.h3?".format(full_hmm_path)):
+                    for filename in glob.glob("{}.h3?".format(full_hmm_path)):
                         logging.debug("removing outdated file %r", filename)
                         os.remove(filename)
                 except OSError as err:
@@ -624,7 +625,6 @@ class active_site_finder(object):
                 result = subprocessing.run_hmmpress(full_hmm_path)
                 if not result.successful():
                     failure_messages.append("Failed to hmmpress %r: %r" % (profile.text, result.stderr))
-                    import datetime
                     failure_messages.append("HMM binary files outdated. %s (changed: %s) vs %s (changed: %s)" %
                                             (profile.text, datetime.datetime.fromtimestamp(hmm_mtime),
                                              binary, datetime.datetime.fromtimestamp(binary_mtime)))
